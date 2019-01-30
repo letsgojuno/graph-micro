@@ -9,16 +9,18 @@ const {
 } = require('graphql-tools');
 const { HttpLink } = require('apollo-link-http');
 
-const typeDefs = gql`
-  type Person {
-    name: String!
-    age: Int!
-  }
+const delay = ms => new Promise(res => setTimeout(res, ms));
 
+const typeDefs = gql`
   type Query {
     sayHello: String
     author: Person
     rates(currency: String!): ExchangeRates
+  }
+
+  type Person {
+    name: String!
+    age: Int!
   }
 
   type ExchangeRates {
@@ -33,12 +35,21 @@ const typeDefs = gql`
   }
 `;
 
+const typeExtension = gql`
+  extend type User {
+    pokemon: Pokemon
+    age: Int
+  }
+`;
+
 const resolvers = {
   Query: {
     sayHello(parent, args, context) {
       return 'Hello World!';
     },
+
     author: () => ({ name: 'Michael', age: 123 }),
+
     rates: async (root, { currency }) => {
       try {
         const results = await fetch(
@@ -50,8 +61,11 @@ const resolvers = {
       }
     }
   },
+
   ExchangeRates: {
-    currency: ({ data: { currency } }) => currency,
+    currency(parent, args, context) {
+      return parent.data.currency;
+    },
     rates: async ({ data: { rates } }, { first }) => {
       let currencyData;
       try {
@@ -61,7 +75,7 @@ const resolvers = {
         console.error(e);
       }
 
-      const tmp = _.map(rates, (rate, currency) => {
+      const paginated = _.map(rates, (rate, currency) => {
         const currencyInfo = currencyData.data.find(
           c => c.id.toUpperCase() === currency
         );
@@ -73,7 +87,7 @@ const resolvers = {
         };
       });
 
-      return tmp.slice(0, Math.min(first, tmp.length));
+      return paginated.slice(0, Math.min(first, paginated.length));
     }
   }
 };
@@ -83,21 +97,46 @@ const local = makeExecutableSchema({
   resolvers
 });
 
-const getRemoteSchema = async () => {
-  const link = new HttpLink({ uri: 'https://fakerql.com/graphql', fetch });
-  const remoteSchema = await introspectSchema(link);
-  return makeRemoteExecutableSchema({
-    schema: remoteSchema,
-    link
-  });
+const getRemoteSchema = async uri => {
+  const link = new HttpLink({ uri, fetch });
+  const schema = await introspectSchema(link);
+  return makeRemoteExecutableSchema({ schema, link });
+};
+
+const getRemoteSchemas = async uris => {
+  return Promise.all(uris.map(uri => getRemoteSchema(uri)));
 };
 
 module.exports = async (req, res) => {
-  const remote = await getRemoteSchema();
-  const schema = mergeSchemas({
-    schemas: [local, remote]
+  const schemas = await getRemoteSchemas([
+    'https://fakerql.com/graphql',
+    'https://graphql-pokemon.now.sh'
+  ]);
+  const combinedSchemas = mergeSchemas({
+    schemas: [local, ...schemas, typeExtension],
+    resolvers: {
+      User: {
+        async age() {
+          await delay(1000);
+          return 123;
+        },
+        pokemon(parent, args, context, info) {
+          console.log({ parent, args });
+          return info.mergeInfo.delegateToSchema({
+            schema: schemas[1],
+            operation: 'query',
+            fieldName: 'pokemon',
+            args: {
+              name: 'Pikachu'
+            },
+            context,
+            info
+          });
+        }
+      }
+    }
   });
-  const apolloServer = new ApolloServer({ schema });
 
+  const apolloServer = new ApolloServer({ schema: combinedSchemas });
   return apolloServer.createHandler()(req, res);
 };
