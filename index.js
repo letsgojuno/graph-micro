@@ -1,12 +1,8 @@
 const { ApolloServer, gql } = require('apollo-server-micro');
 const fetch = require('node-fetch');
 const _ = require('lodash');
-const {
-  makeExecutableSchema,
-  makeRemoteExecutableSchema,
-  mergeSchemas,
-  introspectSchema
-} = require('graphql-tools');
+const getRemoteSchemas = require('./get-remote-schemas');
+const { makeExecutableSchema, mergeSchemas } = require('graphql-tools');
 const { HttpLink } = require('apollo-link-http');
 
 const delay = ms => new Promise(res => setTimeout(res, ms));
@@ -14,7 +10,7 @@ const delay = ms => new Promise(res => setTimeout(res, ms));
 const typeDefs = gql`
   type Query {
     sayHello: String
-    author: Person
+    employee: Person
     rates(currency: String!): ExchangeRates
   }
 
@@ -45,10 +41,10 @@ const typeExtension = gql`
 const resolvers = {
   Query: {
     sayHello(parent, args, context) {
-      return 'Hello World!';
+      return 'Hello Worldasdfasfd!';
     },
 
-    author: () => ({ name: 'Michael', age: 123 }),
+    employee: () => ({ name: 'Michael', age: 123 }),
 
     rates: async (root, { currency }) => {
       try {
@@ -66,6 +62,7 @@ const resolvers = {
     currency(parent, args, context) {
       return parent.data.currency;
     },
+
     rates: async ({ data: { rates } }, { first }) => {
       let currencyData;
       try {
@@ -79,7 +76,6 @@ const resolvers = {
         const currencyInfo = currencyData.data.find(
           c => c.id.toUpperCase() === currency
         );
-
         return {
           name: currencyInfo ? currencyInfo.name : null,
           currency,
@@ -97,31 +93,23 @@ const local = makeExecutableSchema({
   resolvers
 });
 
-const getRemoteSchema = async uri => {
-  const link = new HttpLink({ uri, fetch });
-  const schema = await introspectSchema(link);
-  return makeRemoteExecutableSchema({ schema, link });
-};
-
-const getRemoteSchemas = async uris => {
-  return Promise.all(uris.map(uri => getRemoteSchema(uri)));
-};
-
 module.exports = async (req, res) => {
   const schemas = await getRemoteSchemas([
     'https://fakerql.com/graphql',
     'https://graphql-pokemon.now.sh'
   ]);
+
   const combinedSchemas = mergeSchemas({
     schemas: [local, ...schemas, typeExtension],
+
     resolvers: {
       User: {
         async age() {
-          await delay(1000);
+          await delay(3000); // Potential API call.
           return 123;
         },
+
         pokemon(parent, args, context, info) {
-          console.log({ parent, args });
           return info.mergeInfo.delegateToSchema({
             schema: schemas[1],
             operation: 'query',
